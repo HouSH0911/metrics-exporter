@@ -1,0 +1,22 @@
+{
+    "baseDirs": [
+        "/home/xDR/log/",
+        "/var/log/xDR/"
+    ],
+    "processes": [
+        "dsu",
+        "pmon"
+    ],
+    "targets": [
+        {
+            "host": "192.168.1.100",
+            "ports": [80, 443, 8080]
+        },
+        {
+            "host": "example.com",
+            "ports": [22, 3306]
+        }
+    ]
+}
+
+  
