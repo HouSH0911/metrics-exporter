@@ -406,12 +406,12 @@ func handler(w http.ResponseWriter, r *http.Request, cfg Config) {
 	var directoryStatuses []DirectoryStatus
 
 	configMutex.RLock()
-	baseDirs := append([]string(nil), cfg.BaseDirs...)
+	baseDirs := append([]BaseDirConfig(nil), cfg.BaseDirs...)
 	configMutex.RUnlock()
 	now := time.Now()
 
 	// 遍历所有配置的 baseDir
-	for _, baseCfg := range baseDirs {
+	for _, dirCfg := range baseDirs {
 		// 不在监控时间段，直接跳过
 		if !shouldMonitorDir(dirCfg, now) {
 			continue
