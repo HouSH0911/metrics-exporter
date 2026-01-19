@@ -1,7 +1,17 @@
 {
     "baseDirs": [
-        "/home/xDR/log/",
-        "/var/log/xDR/"
+        {
+            "path": "/home/xDR/log/",
+            "timeRanges": [
+              { "start": "00:00", "end": "23:59" }
+            ]
+        },
+        {
+            "path": "/home/xDR/sjjs/log/",
+            "timeRanges": [
+              { "start": "20:00", "end": "23:00" }
+            ]
+        }
     ],
     "processes": [
         "dsu",
