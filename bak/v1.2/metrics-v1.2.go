@@ -28,9 +28,9 @@ type Metrics struct {
 
 // 初始化结构体，读取配置文件中的多个目录
 type Config struct {
-	BaseDirs  []string `json:"baseDirs"`
-	Processes []string `json:"processes"`
-	Targets   []Target `json:"targets"`
+	BaseDirs  []BaseDirConfig `json:"baseDirs"`
+	Processes []string        `json:"processes"`
+	Targets   []Target        `json:"targets"`
 }
 
 // 目录和文件是否存在的结构体
@@ -65,6 +65,16 @@ type PortStatus struct {
 	Status bool   `json:"status"`
 }
 
+type TimeRange struct {
+	Start string `json:"start"` // HH:MM
+	End   string `json:"end"`   // HH:MM
+}
+
+type BaseDirConfig struct {
+	Path       string      `json:"path"`
+	TimeRanges []TimeRange `json:"timeRanges"`
+}
+
 var (
 	config      Config
 	configMutex sync.RWMutex
@@ -85,7 +95,7 @@ var (
 const (
 	collectorInterval    = 3 * time.Second  // 后台采集间隔（CPU/内存/进程）
 	diskRefreshInterval  = 5 * time.Minute  // 磁盘分区刷新频率
-	cacheTTL             = 35 * time.Second // 原来 TTL，兼容保留（但我们使用后台采集）
+	cacheTTL             = 30 * time.Second // 原来 TTL，兼容保留（但我们使用后台采集）
 	emaAlpha             = 0.6              // EMA 平滑系数（0<alpha<=1），值越小越平滑
 	cpuSampleNonBlocking = true             // 使用 cpu.Percent(0, false) 来避免阻塞
 )
@@ -245,6 +255,44 @@ func doCollectMetrics() {
 	cache.mu.Unlock()
 }
 
+// 判断当前时间是否在时间段内
+func inTimeRange(r TimeRange, now time.Time) bool {
+	layout := "15:04"
+
+	start, err1 := time.Parse(layout, r.Start)
+	end, err2 := time.Parse(layout, r.End)
+	if err1 != nil || err2 != nil {
+		return false
+	}
+
+	nowMin := now.Hour()*60 + now.Minute()
+	startMin := start.Hour()*60 + start.Minute()
+	endMin := end.Hour()*60 + end.Minute()
+
+	// 普通时间段：09:00 - 18:00
+	if startMin <= endMin {
+		return nowMin >= startMin && nowMin <= endMin
+	}
+
+	// 跨天时间段：23:00 - 02:00
+	return nowMin >= startMin || nowMin <= endMin
+}
+
+// 判断是否需要监控该目录（基于时间段配置）
+func shouldMonitorDir(dir BaseDirConfig, now time.Time) bool {
+	// 没配时间段 = 默认全天监控（向后兼容）
+	if len(dir.TimeRanges) == 0 {
+		return true
+	}
+
+	for _, r := range dir.TimeRanges {
+		if inTimeRange(r, now) {
+			return true
+		}
+	}
+	return false
+}
+
 // 获取当前日期，格式为 YYYYMMDD
 func getCurrentDate() string {
 	return time.Now().Format("20060102")
@@ -356,13 +404,23 @@ func handler(w http.ResponseWriter, r *http.Request, cfg Config) {
 	date1, timeMinus60 := getTimeToNearest5Minus60()
 
 	var directoryStatuses []DirectoryStatus
-	configMutex.RLock()
-	baseDirs := append([]string(nil), cfg.BaseDirs...)
-	configMutex.RUnlock()
 
-	for _, baseDir := range baseDirs {
+	configMutex.RLock()
+	baseDirs := append([]BaseDirConfig(nil), cfg.BaseDirs...)
+	configMutex.RUnlock()
+	now := time.Now()
+
+	// 遍历所有配置的 baseDir
+	for _, dirCfg := range baseDirs {
+		// 不在监控时间段，直接跳过
+		if !shouldMonitorDir(dirCfg, now) {
+			continue
+		}
+		baseDir := dirCfg.Path
+
 		folderExists, folderPath := checkFolderExists(baseDir, date)
 		fileExists := false
+
 		if folderExists {
 			fileExistsCurrent, _ := checkFileExistsWithTime(folderPath, date+timeStr)
 			fileExistsNext, _ := checkFileExistsWithTime(folderPath, date+timeStrNext)

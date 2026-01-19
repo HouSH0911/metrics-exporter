@@ -7,6 +7,9 @@
             ]
         },
         {
+            "path": "/home/xDR/log/"
+        },
+        {
             "path": "/home/xDR/sjjs/log/",
             "timeRanges": [
               { "start": "20:00", "end": "23:00" }
