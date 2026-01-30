@@ -1,0 +1,35 @@
+{
+    "baseDirs": [
+        {
+            "path": "/home/xDR/log/",
+            "timeRanges": [
+              { "start": "00:00", "end": "23:59" }
+            ]
+        },
+        {
+            "path": "/home/xDR/log/"
+        },
+        {
+            "path": "/home/xDR/sjjs/log/",
+            "timeRanges": [
+              { "start": "20:00", "end": "22:59" }
+            ]
+        }
+    ],
+    "processes": [
+        "dsu",
+        "pmon"
+    ],
+    "targets": [
+        {
+            "host": "192.168.1.100",
+            "ports": [80, 443, 8080]
+        },
+        {
+            "host": "example.com",
+            "ports": [22, 3306]
+        }
+    ]
+}
+
+  
