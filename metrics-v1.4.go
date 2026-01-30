@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -28,11 +30,26 @@ type Metrics struct {
 	DiskUsage   map[string]float64 `json:"disk_usage"`
 }
 
+// v1.4新增：文件传输监控配置
+type FileTransferConfig struct {
+	LogPath string   `json:"logPath"` // 统计日志所在的目录
+	Streams []string `json:"streams"` // 需要统计的数据流名称列表
+}
+
+// v1.4新增：文件传输统计结果
+type StreamStat struct {
+	StreamName string `json:"streamName"`
+	TotalFiles int64  `json:"totalFiles"` // 成功传输的文件总数
+	TotalSize  int64  `json:"totalSize"`  // 成功传输的文件总大小(字节)
+	StatDate   string `json:"statDate"`   // 统计的日期(YYYYMMDD)
+}
+
 // 初始化结构体，读取配置文件中的多个目录
 type Config struct {
-	BaseDirs  []BaseDirConfig `json:"baseDirs"`
-	Processes []string        `json:"processes"`
-	Targets   []Target        `json:"targets"`
+	BaseDirs     []BaseDirConfig    `json:"baseDirs"`
+	Processes    []string           `json:"processes"`
+	Targets      []Target           `json:"targets"`
+	FileTransfer FileTransferConfig `json:"fileTransfer"` // 新增配置段
 }
 
 // 目录和文件是否存在的结构体
@@ -53,6 +70,7 @@ type StatusResponse struct {
 	DirectoryStatuses []DirectoryStatus `json:"directoryStatuses"`
 	ProcessStatuses   []ProcessStatus   `json:"processStatuses"`
 	PortStatuses      []PortStatus      `json:"portStatuses"`
+	StreamStats       []StreamStat      `json:"streamStats"` // 新增：传输统计结果
 	Metrics           Metrics           `json:"metrics"`
 }
 
@@ -85,18 +103,21 @@ var (
 		mu              sync.RWMutex
 		Metrics         Metrics
 		ProcessStatuses []ProcessStatus
+		StreamStats     []StreamStat // 新增缓存
 		LastUpdated     time.Time
 		// 内部字段：EMA 和磁盘分区缓存
-		lastCPUEMA      float64
-		diskPartitions  []disk.PartitionStat
-		lastDiskRefresh time.Time
-		processScanAt   time.Time
+		lastCPUEMA          float64
+		diskPartitions      []disk.PartitionStat
+		lastDiskRefresh     time.Time
+		lastTransferRefresh time.Time // 新增：上次刷新传输统计的时间
+		processScanAt       time.Time
 	}{}
 )
 
 const (
 	collectorInterval    = 3 * time.Second  // 后台采集间隔（CPU/内存/进程）
 	diskRefreshInterval  = 5 * time.Minute  // 磁盘分区刷新频率
+	transferStatInterval = 5 * time.Minute  // 文件传输统计刷新频率（不需要太频繁，因为文件每天只生成一次）
 	cacheTTL             = 30 * time.Second // 原来 TTL，兼容保留（但我们使用后台采集）
 	emaAlpha             = 0.6              // EMA 平滑系数（0<alpha<=1），值越小越平滑
 	cpuSampleNonBlocking = true             // 使用 cpu.Percent(0, false) 来避免阻塞
@@ -118,7 +139,7 @@ func startBackgroundCollector() {
 
 // doCollectMetrics: 在后台采集 CPU/Memory/Disk/Processes，并更新 cache（并发安全）
 func doCollectMetrics() {
-	// CPU: 使用非阻塞采样 + EMA 平滑
+	// 1.CPU: 使用非阻塞采样 + EMA 平滑
 	var cpuVal float64
 	if cpuSampleNonBlocking {
 		if vals, err := cpu.Percent(0, false); err == nil && len(vals) > 0 {
@@ -135,7 +156,7 @@ func doCollectMetrics() {
 		}
 	}
 
-	// Memory: 更合理的计算方式（排除 buffers & cached）
+	// 2.Memory: 更合理的计算方式（排除 buffers & cached）
 	var memVal float64
 	if vm, err := mem.VirtualMemory(); err == nil {
 		// 注意： linux 上 Buffers 和 Cached 字段存在，实际使用内存应该减去可回收部分
@@ -148,7 +169,7 @@ func doCollectMetrics() {
 		}
 	}
 
-	// Disk: 如果上次刷新超过阈值，则重新获取 partitions 并计算使用率
+	// 3.Disk: 如果上次刷新超过阈值，则重新获取 partitions 并计算使用率
 	var diskUsage map[string]float64
 	now := time.Now()
 	cache.mu.RLock()
@@ -183,7 +204,30 @@ func doCollectMetrics() {
 		cache.mu.RUnlock()
 	}
 
-	// 进程扫描：周期性扫描一次 process list，避免每次 handler 调用 pgrep
+	// 4. File Transfer Stats (新增逻辑)
+	// 因为这个文件每天只生成一次，不需要每3秒读一次IO。每5分钟刷新一次即可。
+	var currentStreamStats []StreamStat
+	cache.mu.RLock()
+	lastTransferRefresh := cache.lastTransferRefresh
+	transferConfig := config.FileTransfer // 读取配置副本
+	cache.mu.RUnlock()
+
+	if lastTransferRefresh.IsZero() || now.Sub(lastTransferRefresh) > transferStatInterval {
+		// 执行文件解析
+		newStats := collectTransferStats(transferConfig)
+
+		cache.mu.Lock()
+		cache.StreamStats = newStats
+		cache.lastTransferRefresh = now
+		cache.mu.Unlock()
+		currentStreamStats = newStats
+	} else {
+		cache.mu.RLock()
+		currentStreamStats = cache.StreamStats
+		cache.mu.RUnlock()
+	}
+
+	// 5进程扫描：周期性扫描一次 process list，避免每次 handler 调用 pgrep
 	processStatuses := []ProcessStatus{}
 	configMutex.RLock()
 	procsToCheck := append([]string{}, config.Processes...)
@@ -253,8 +297,89 @@ func doCollectMetrics() {
 		cache.Metrics.DiskUsage = diskUsage
 	}
 	cache.ProcessStatuses = processStatuses
+	cache.StreamStats = currentStreamStats
 	cache.LastUpdated = now
 	cache.mu.Unlock()
+}
+
+// 新增：收集文件传输统计信息
+func collectTransferStats(cfg FileTransferConfig) []StreamStat {
+	// 计算前一天的日期
+	yesterday := time.Now().Add(-24 * time.Hour).Format("20060102")
+	fileName := fmt.Sprintf("SFTPOutput.fileLog.stat.%s", yesterday)
+	fullPath := filepath.Join(cfg.LogPath, fileName)
+
+	// 初始化结果Map
+	statsMap := make(map[string]*StreamStat)
+	for _, stream := range cfg.Streams {
+		statsMap[stream] = &StreamStat{
+			StreamName: stream,
+			StatDate:   yesterday,
+			TotalFiles: 0,
+			TotalSize:  0,
+		}
+	}
+
+	file, err := os.Open(fullPath)
+	if err != nil {
+		// 如果文件不存在（比如刚过0点还没生成，或者路径配置错误），记录日志并返回空值的统计
+		// log.Printf("Warning: Could not open transfer stat file %s: %v", fullPath, err)
+		// 返回初始化的0值
+		var results []StreamStat
+		for _, s := range statsMap {
+			results = append(results, *s)
+		}
+		return results
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := scanner.Text()
+		parts := strings.Split(line, "|")
+
+		// 简单的校验：根据描述至少需要有12个字段
+		// 索引1: 数据流名称
+		// 索引4: 文件大小
+		// 索引11(最后一个): 状态 (0成功, 1失败)
+		if len(parts) < 12 {
+			continue
+		}
+
+		streamName := strings.TrimSpace(parts[1])
+		fileSizeStr := strings.TrimSpace(parts[4])
+		statusStr := strings.TrimSpace(parts[len(parts)-1]) // 获取最后一个字段
+
+		// 检查该数据流是否在配置的监控列表中
+		stat, exists := statsMap[streamName]
+		if !exists {
+			continue
+		}
+
+		// 检查状态是否成功 ("0" 表示成功)
+		if statusStr != "0" {
+			continue
+		}
+
+		// 解析大小
+		size, err := strconv.ParseInt(fileSizeStr, 10, 64)
+		if err != nil {
+			continue
+		}
+
+		// 累加
+		stat.TotalFiles++
+		stat.TotalSize += size
+	}
+
+	// 转换为切片返回
+	var results []StreamStat
+	for _, stream := range cfg.Streams {
+		if s, ok := statsMap[stream]; ok {
+			results = append(results, *s)
+		}
+	}
+	return results
 }
 
 // 判断当前时间是否在时间段内
@@ -373,6 +498,7 @@ func handler(w http.ResponseWriter, r *http.Request, cfg Config) {
 	cache.mu.RLock()
 	metricsCopy := cache.Metrics
 	processesCopy := append([]ProcessStatus(nil), cache.ProcessStatuses...)
+	streamStatsCopy := append([]StreamStat(nil), cache.StreamStats...) // 复制一份新的统计数据
 	cacheLastUpdated := cache.LastUpdated
 	cache.mu.RUnlock()
 
@@ -392,6 +518,7 @@ func handler(w http.ResponseWriter, r *http.Request, cfg Config) {
 			cache.mu.RLock()
 			metricsCopy = cache.Metrics
 			processesCopy = append([]ProcessStatus(nil), cache.ProcessStatuses...)
+			streamStatsCopy = append([]StreamStat(nil), cache.StreamStats...)
 			cache.mu.RUnlock()
 		case <-time.After(2 * time.Second):
 			// 超时，继续使用旧缓存
@@ -460,6 +587,7 @@ func handler(w http.ResponseWriter, r *http.Request, cfg Config) {
 		DirectoryStatuses: directoryStatuses,
 		ProcessStatuses:   processesCopy,
 		PortStatuses:      portStatuses,
+		StreamStats:       streamStatsCopy, // 返回新增的统计
 		Metrics:           metricsCopy,
 	}
 
