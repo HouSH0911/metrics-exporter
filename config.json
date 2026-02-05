@@ -3,7 +3,7 @@
         {
             "path": "/home/xDR_sjjs/log/",
             "timeRanges": [
-              { "start": "00:00", "end": "23:59" }
+              { "start": "20:00", "end": "22:59" }
             ]
         },
         {
@@ -27,13 +27,13 @@
         },
         {
             "host": "example.com",
-            "ports": [22, 3306]
+            "ports": [20022, 3306]
         }
         
     ],
     "fileTransfer": {
         "logPath": "/home/haohan/importer/logs/statistic/",
-        "streams": ["XDR_SJJS"]
+        "streams": ["XDR_SJJS", "XDR_JK"]
     }
 }
 
