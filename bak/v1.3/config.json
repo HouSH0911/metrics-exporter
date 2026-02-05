@@ -1,16 +1,16 @@
 {
     "baseDirs": [
         {
-            "path": "/home/xDR_sjjs/log/",
+            "path": "/home/xDR/log/",
             "timeRanges": [
-              { "start": "20:00", "end": "22:59" }
+              { "start": "00:00", "end": "23:59" }
             ]
         },
         {
-            "path": "/home/xDR/logbak/"
+            "path": "/home/xDR/log/"
         },
         {
-            "path": "/home/xDR_sjjs/fjyd_sftp/logbak",
+            "path": "/home/xDR/sjjs/log/",
             "timeRanges": [
               { "start": "20:00", "end": "22:59" }
             ]
@@ -27,14 +27,9 @@
         },
         {
             "host": "example.com",
-            "ports": [20022, 3306]
+            "ports": [22, 3306]
         }
-        
-    ],
-    "fileTransfer": {
-        "logPath": "/home/haohan/importer/logs/statistic/",
-        "streams": ["XDR_SJJS", "XDR_JK"]
-    }
+    ]
 }
 
   
