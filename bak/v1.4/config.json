@@ -1,5 +1,4 @@
 {
-    "port": 9600,
     "baseDirs": [
         {
             "path": "/home/xDR_sjjs/log/",

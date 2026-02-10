@@ -46,7 +46,6 @@ type StreamStat struct {
 
 // 初始化结构体，读取配置文件中的多个目录
 type Config struct {
-	Port         int                `json:"port"`
 	BaseDirs     []BaseDirConfig    `json:"baseDirs"`
 	Processes    []string           `json:"processes"`
 	Targets      []Target           `json:"targets"`
@@ -647,15 +646,8 @@ func main() {
 	http.HandleFunc("/check", func(w http.ResponseWriter, r *http.Request) { // 当访问/check路径时，调用匿名函数，这个匿名函数交给handler处理
 		handler(w, r, config)
 	})
-
-	port := config.Port
-	if port == 0 {
-		port = 9600 // 默认端口
-	}
-
-	addr := fmt.Sprintf(":%d", port)
-	fmt.Printf("Starting HTTP server on port %d...\n", port)
-	err := http.ListenAndServe(addr, nil)
+	fmt.Println("Starting HTTP server on port 9600...")
+	err := http.ListenAndServe(":9600", nil)
 	if err != nil {
 		log.Fatalf("Failed to start server: %v", err)
 	}
