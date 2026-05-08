@@ -97,6 +97,11 @@ type BaseDirConfig struct {
 	TimeRanges []TimeRange `json:"timeRanges"`
 }
 
+// ipFilterListener 在 TCP 层面拒绝非授权 IP 的连接
+type ipFilterListener struct {
+	inner net.Listener
+}
+
 var (
 	config      Config
 	configMutex sync.RWMutex
@@ -512,11 +517,11 @@ func invalidateCache() {
 	cache.LastUpdated = time.Time{} // 设置为零值使缓存失效
 }
 
-// 提取客户端IP（去除端口号）
-func getClientIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
+// getIPFromAddr 从 "host:port" 字符串中提取 IP
+func getIPFromAddr(addr string) string {
+	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
-		return r.RemoteAddr // 无端口的情况
+		return addr
 	}
 	return host
 }
@@ -544,22 +549,41 @@ func isAllowed(allowedHosts []string, clientIP string) bool {
 	return false
 }
 
+func (l *ipFilterListener) Accept() (net.Conn, error) {
+	for {
+		conn, err := l.inner.Accept()
+		if err != nil {
+			return nil, err
+		}
+
+		configMutex.RLock()
+		allowedHosts := config.AllowedHosts
+		configMutex.RUnlock()
+
+		// 未配置访问控制，直接放行
+		if len(allowedHosts) == 0 {
+			return conn, nil
+		}
+
+		clientIP := getIPFromAddr(conn.RemoteAddr().String())
+		if isAllowed(allowedHosts, clientIP) {
+			return conn, nil
+		}
+
+		conn.Close()
+	}
+}
+
+func (l *ipFilterListener) Close() error {
+	return l.inner.Close()
+}
+
+func (l *ipFilterListener) Addr() net.Addr {
+	return l.inner.Addr()
+}
+
 // handler: 返回缓存结果（并在 handler 内补充 directory/port 状态检查）
 func handler(w http.ResponseWriter, r *http.Request, cfg Config) {
-	// 访问控制：仅允许配置的地址访问（支持单IP、CIDR网段）
-	if len(cfg.AllowedHosts) > 0 {
-		clientIP := getClientIP(r)
-		if !isAllowed(cfg.AllowedHosts, clientIP) {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusForbidden)
-			json.NewEncoder(w).Encode(map[string]string{
-				"error":   "Forbidden",
-				"message": fmt.Sprintf("Access denied for %s", clientIP),
-			})
-			return
-		}
-	}
-
 	// 读取缓存（RLock）
 	cache.mu.RLock()
 	metricsCopy := cache.Metrics
@@ -701,8 +725,13 @@ func main() {
 	}
 
 	addr := fmt.Sprintf(":%d", port)
+	rawListener, err := net.Listen("tcp", addr)
+	if err != nil {
+		log.Fatalf("Failed to start server: %v", err)
+	}
+	filteredListener := &ipFilterListener{inner: rawListener}
 	fmt.Printf("Starting HTTP server on port %d...\n", port)
-	err := http.ListenAndServe(addr, nil)
+	err = http.Serve(filteredListener, nil)
 	if err != nil {
 		log.Fatalf("Failed to start server: %v", err)
 	}
