@@ -47,6 +47,7 @@ type StreamStat struct {
 // 初始化结构体，读取配置文件中的多个目录
 type Config struct {
 	Port         int                `json:"port"`
+	AllowedHosts []string           `json:"allowedHosts"` // 允许访问/check端点的地址，支持单个IP、CIDR网段
 	BaseDirs     []BaseDirConfig    `json:"baseDirs"`
 	Processes    []string           `json:"processes"`
 	Targets      []Target           `json:"targets"`
@@ -511,8 +512,54 @@ func invalidateCache() {
 	cache.LastUpdated = time.Time{} // 设置为零值使缓存失效
 }
 
+// 提取客户端IP（去除端口号）
+func getClientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr // 无端口的情况
+	}
+	return host
+}
+
+// isAllowed 检查客户端IP是否在允许列表中，支持：单IP、CIDR网段
+func isAllowed(allowedHosts []string, clientIP string) bool {
+	client := net.ParseIP(clientIP)
+	if client == nil {
+		return false
+	}
+	for _, item := range allowedHosts {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		if strings.Contains(item, "/") {
+			_, cidr, err := net.ParseCIDR(item)
+			if err == nil && cidr.Contains(client) {
+				return true
+			}
+		} else if item == clientIP {
+			return true
+		}
+	}
+	return false
+}
+
 // handler: 返回缓存结果（并在 handler 内补充 directory/port 状态检查）
 func handler(w http.ResponseWriter, r *http.Request, cfg Config) {
+	// 访问控制：仅允许配置的地址访问（支持单IP、CIDR网段）
+	if len(cfg.AllowedHosts) > 0 {
+		clientIP := getClientIP(r)
+		if !isAllowed(cfg.AllowedHosts, clientIP) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			json.NewEncoder(w).Encode(map[string]string{
+				"error":   "Forbidden",
+				"message": fmt.Sprintf("Access denied for %s", clientIP),
+			})
+			return
+		}
+	}
+
 	// 读取缓存（RLock）
 	cache.mu.RLock()
 	metricsCopy := cache.Metrics
