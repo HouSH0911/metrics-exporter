@@ -10,13 +10,7 @@
         },
         {
             "path": "/home/xDR/logbak/"
-        },
-        {
-            "path": "/home/xDR_sjjs/fjyd_sftp/logbak",
-            "timeRanges": [
-              { "start": "20:00", "end": "22:59" }
-            ]
-        }
+        }   
     ],
     "processes": [
         "dsu",
