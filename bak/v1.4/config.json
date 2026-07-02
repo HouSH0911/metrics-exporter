@@ -1,4 +1,6 @@
 {
+    "port": 9600,
+    "allowedHosts": ["10.10.0.2", "192.168.1.0/24"],
     "baseDirs": [
         {
             "path": "/home/xDR_sjjs/log/",
@@ -8,13 +10,7 @@
         },
         {
             "path": "/home/xDR/logbak/"
-        },
-        {
-            "path": "/home/xDR_sjjs/fjyd_sftp/logbak",
-            "timeRanges": [
-              { "start": "20:00", "end": "22:59" }
-            ]
-        }
+        }   
     ],
     "processes": [
         "dsu",
@@ -29,7 +25,6 @@
             "host": "example.com",
             "ports": [20022, 3306]
         }
-        
     ],
     "fileTransfer": {
         "logPath": "/home/haohan/importer/logs/statistic/",

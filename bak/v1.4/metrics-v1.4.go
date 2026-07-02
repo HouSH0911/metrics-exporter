@@ -46,6 +46,8 @@ type StreamStat struct {
 
 // 初始化结构体，读取配置文件中的多个目录
 type Config struct {
+	Port         int                `json:"port"`
+	AllowedHosts []string           `json:"allowedHosts"` // 允许访问/check端点的地址，支持单个IP、CIDR网段
 	BaseDirs     []BaseDirConfig    `json:"baseDirs"`
 	Processes    []string           `json:"processes"`
 	Targets      []Target           `json:"targets"`
@@ -93,6 +95,11 @@ type TimeRange struct {
 type BaseDirConfig struct {
 	Path       string      `json:"path"`
 	TimeRanges []TimeRange `json:"timeRanges"`
+}
+
+// ipFilterListener 在 TCP 层面拒绝非授权 IP 的连接
+type ipFilterListener struct {
+	inner net.Listener
 }
 
 var (
@@ -510,6 +517,71 @@ func invalidateCache() {
 	cache.LastUpdated = time.Time{} // 设置为零值使缓存失效
 }
 
+// getIPFromAddr 从 "host:port" 字符串中提取 IP
+func getIPFromAddr(addr string) string {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+	return host
+}
+
+// isAllowed 检查客户端IP是否在允许列表中，支持：单IP、CIDR网段
+func isAllowed(allowedHosts []string, clientIP string) bool {
+	client := net.ParseIP(clientIP)
+	if client == nil {
+		return false
+	}
+	for _, item := range allowedHosts {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		if strings.Contains(item, "/") {
+			_, cidr, err := net.ParseCIDR(item)
+			if err == nil && cidr.Contains(client) {
+				return true
+			}
+		} else if item == clientIP {
+			return true
+		}
+	}
+	return false
+}
+
+func (l *ipFilterListener) Accept() (net.Conn, error) {
+	for {
+		conn, err := l.inner.Accept()
+		if err != nil {
+			return nil, err
+		}
+
+		configMutex.RLock()
+		allowedHosts := config.AllowedHosts
+		configMutex.RUnlock()
+
+		// 未配置访问控制，直接放行
+		if len(allowedHosts) == 0 {
+			return conn, nil
+		}
+
+		clientIP := getIPFromAddr(conn.RemoteAddr().String())
+		if isAllowed(allowedHosts, clientIP) {
+			return conn, nil
+		}
+
+		conn.Close()
+	}
+}
+
+func (l *ipFilterListener) Close() error {
+	return l.inner.Close()
+}
+
+func (l *ipFilterListener) Addr() net.Addr {
+	return l.inner.Addr()
+}
+
 // handler: 返回缓存结果（并在 handler 内补充 directory/port 状态检查）
 func handler(w http.ResponseWriter, r *http.Request, cfg Config) {
 	// 读取缓存（RLock）
@@ -646,8 +718,20 @@ func main() {
 	http.HandleFunc("/check", func(w http.ResponseWriter, r *http.Request) { // 当访问/check路径时，调用匿名函数，这个匿名函数交给handler处理
 		handler(w, r, config)
 	})
-	fmt.Println("Starting HTTP server on port 9600...")
-	err := http.ListenAndServe(":9600", nil)
+
+	port := config.Port
+	if port == 0 {
+		port = 9600 // 默认端口
+	}
+
+	addr := fmt.Sprintf(":%d", port)
+	rawListener, err := net.Listen("tcp", addr)
+	if err != nil {
+		log.Fatalf("Failed to start server: %v", err)
+	}
+	filteredListener := &ipFilterListener{inner: rawListener}
+	fmt.Printf("Starting HTTP server on port %d...\n", port)
+	err = http.Serve(filteredListener, nil)
 	if err != nil {
 		log.Fatalf("Failed to start server: %v", err)
 	}
