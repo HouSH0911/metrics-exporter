@@ -17,8 +17,9 @@ type Metrics struct {
 
 // v1.4新增：文件传输监控配置
 type FileTransferConfig struct {
-	LogPath string   `json:"logPath"` // 统计日志所在的目录
-	Streams []string `json:"streams"` // 需要统计的数据流名称列表
+	LogPath       string   `json:"logPath"`       // 统计日志所在的目录
+	Streams       []string `json:"streams"`       // 需要统计的数据流名称列表
+	RecentMinutes int      `json:"recentMinutes"` // v1.6新增：最近N分钟的5分点统计窗口
 }
 
 // v1.4新增：文件传输统计结果
@@ -27,6 +28,15 @@ type StreamStat struct {
 	TotalFiles int64  `json:"totalFiles"` // 成功传输的文件总数
 	TotalSize  int64  `json:"totalSize"`  // 成功传输的文件总大小(字节)
 	StatDate   string `json:"statDate"`   // 统计的日期(YYYYMMDD)
+}
+
+// v1.6新增：话单类型统计（按数据流+话单类型+5分钟时间点维度）
+type CallTypeStat struct {
+	StreamName string `json:"streamName"` // 数据流名称，如 XDR_JK
+	CallType   string `json:"callType"`   // 话单类型，如 100、106
+	TimePoint  string `json:"timePoint"`  // 5分钟时间点，如 202607030000
+	TotalFiles int64  `json:"totalFiles"` // 成功传输的文件数
+	TotalSize  int64  `json:"totalSize"`  // 成功传输的文件总大小(字节)
 }
 
 // 初始化结构体，读取配置文件中的多个目录
@@ -58,7 +68,8 @@ type StatusResponse struct {
 	DirectoryStatuses []DirectoryStatus `json:"directoryStatuses"`
 	ProcessStatuses   []ProcessStatus   `json:"processStatuses"`
 	PortStatuses      []PortStatus      `json:"portStatuses"`
-	StreamStats       []StreamStat      `json:"streamStats"` // 新增：传输统计结果
+	StreamStats       []StreamStat      `json:"streamStats"`   // v1.4新增：传输统计结果
+	CallTypeStats     []CallTypeStat    `json:"callTypeStats"` // v1.6新增：话单类型统计
 	Metrics           Metrics           `json:"metrics"`
 }
 
@@ -96,7 +107,8 @@ var (
 		mu              sync.RWMutex
 		Metrics         Metrics
 		ProcessStatuses []ProcessStatus
-		StreamStats     []StreamStat // 新增缓存
+		StreamStats     []StreamStat   // v1.4新增缓存
+		CallTypeStats   []CallTypeStat // v1.6新增缓存
 		LastUpdated     time.Time
 		// 内部字段：EMA 和磁盘分区缓存
 		lastCPUEMA          float64
