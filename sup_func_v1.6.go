@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -98,26 +99,29 @@ func doCollectMetrics() {
 		cache.mu.RUnlock()
 	}
 
-	// 4. File Transfer Stats (新增逻辑)
-	// 因为这个文件每天只生成一次，不需要每3秒读一次IO。每5分钟刷新一次即可。
+	// 4. File Transfer Stats
 	var currentStreamStats []StreamStat
+	var currentCallTypeStats []CallTypeStat
 	cache.mu.RLock()
 	lastTransferRefresh := cache.lastTransferRefresh
-	transferConfig := config.FileTransfer // 读取配置副本
+	transferConfig := config.FileTransfer
 	cache.mu.RUnlock()
 
 	if lastTransferRefresh.IsZero() || now.Sub(lastTransferRefresh) > transferStatInterval {
-		// 执行文件解析
 		newStats := collectTransferStats(transferConfig)
+		newCallTypeStats := collectCallTypeStats(transferConfig)
 
 		cache.mu.Lock()
 		cache.StreamStats = newStats
+		cache.CallTypeStats = newCallTypeStats
 		cache.lastTransferRefresh = now
 		cache.mu.Unlock()
 		currentStreamStats = newStats
+		currentCallTypeStats = newCallTypeStats
 	} else {
 		cache.mu.RLock()
 		currentStreamStats = cache.StreamStats
+		currentCallTypeStats = cache.CallTypeStats
 		cache.mu.RUnlock()
 	}
 
@@ -192,6 +196,7 @@ func doCollectMetrics() {
 	}
 	cache.ProcessStatuses = processStatuses
 	cache.StreamStats = currentStreamStats
+	cache.CallTypeStats = currentCallTypeStats
 	cache.LastUpdated = now
 	cache.mu.Unlock()
 }
@@ -402,6 +407,165 @@ func invalidateCache() {
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
 	cache.LastUpdated = time.Time{} // 设置为零值使缓存失效
+}
+
+// collectCallTypeStats 解析统计文件，返回最近 recentMinutes 窗口内按数据流+话单类型+5分钟时间点聚合的统计
+func collectCallTypeStats(cfg FileTransferConfig) []CallTypeStat {
+	if cfg.RecentMinutes <= 0 {
+		return nil
+	}
+
+	now := time.Now()
+	windowStart := now.Add(-time.Duration(cfg.RecentMinutes) * time.Minute)
+
+	// 确定需要读取的日期文件列表
+	datesToRead := []struct {
+		date       string
+		withSuffix bool
+	}{}
+	today := now.Format("20060102")
+	yesterday := now.Add(-24 * time.Hour).Format("20060102")
+	windowStartDate := windowStart.Format("20060102")
+
+	if windowStartDate == today {
+		// 窗口全在今天内
+		datesToRead = append(datesToRead, struct {
+			date       string
+			withSuffix bool
+		}{today, false})
+	} else if windowStartDate == yesterday {
+		// 窗口跨到今天和昨天
+		datesToRead = append(datesToRead, struct {
+			date       string
+			withSuffix bool
+		}{yesterday, true}, struct {
+			date       string
+			withSuffix bool
+		}{today, false})
+	} else {
+		// 窗口跨越更多天，读今天+昨天（覆盖绝大多数场景）
+		datesToRead = append(datesToRead, struct {
+			date       string
+			withSuffix bool
+		}{yesterday, true}, struct {
+			date       string
+			withSuffix bool
+		}{today, false})
+	}
+
+	// 聚合结构: key = "streamName|callType|timePoint"
+	agg := make(map[string]*CallTypeStat)
+
+	for _, dr := range datesToRead {
+		var fileName string
+		if dr.withSuffix {
+			fileName = fmt.Sprintf("SFTPOutput.fileLog.stat.%s", dr.date)
+		} else {
+			fileName = "SFTPOutput.fileLog.stat"
+		}
+		fullPath := filepath.Join(cfg.LogPath, fileName)
+
+		file, err := os.Open(fullPath)
+		if err != nil {
+			continue
+		}
+
+		scanner := bufio.NewScanner(file)
+		for scanner.Scan() {
+			line := scanner.Text()
+			parts := strings.Split(line, "|")
+			if len(parts) < 14 {
+				continue
+			}
+
+			streamName := strings.TrimSpace(parts[1])
+			filePath := strings.TrimSpace(parts[3])
+			fileSizeStr := strings.TrimSpace(parts[4])
+			statusStr := strings.TrimSpace(parts[len(parts)-1])
+
+			// 只统计成功的记录
+			if statusStr != "0" {
+				continue
+			}
+
+			// 检查数据流是否在配置中
+			streamConfigured := false
+			for _, s := range cfg.Streams {
+				if s == streamName {
+					streamConfigured = true
+					break
+				}
+			}
+			if !streamConfigured {
+				continue
+			}
+
+			// 从文件路径中提取文件名并解析话单类型和5分钟时间点
+			fileName := filepath.Base(filePath)
+			// 例: 100_20260703000011_083.csv 或 100_20260702235500_06_083_006.txt
+			underscoreParts := strings.Split(fileName, "_")
+			if len(underscoreParts) < 2 {
+				continue
+			}
+
+			callType := underscoreParts[0]
+			timeStr := underscoreParts[1]
+			if len(timeStr) < 12 {
+				continue
+			}
+			// 取前12位作为 YYYYMMDDHHMM
+			timePoint := timeStr[:12]
+
+			// 解析为时间，检查是否在窗口内
+			t, err := time.Parse("200601021504", timePoint)
+			if err != nil {
+				continue
+			}
+			if t.Before(windowStart) || t.After(now) {
+				continue
+			}
+
+			// 解析文件大小
+			size, err := strconv.ParseInt(fileSizeStr, 10, 64)
+			if err != nil {
+				continue
+			}
+
+			// 聚合
+			key := streamName + "|" + callType + "|" + timePoint
+			if existing, ok := agg[key]; ok {
+				existing.TotalFiles++
+				existing.TotalSize += size
+			} else {
+				agg[key] = &CallTypeStat{
+					StreamName: streamName,
+					CallType:   callType,
+					TimePoint:  timePoint,
+					TotalFiles: 1,
+					TotalSize:  size,
+				}
+			}
+		}
+		file.Close()
+	}
+
+	// 转换为切片返回，按 timePoint 排序
+	var results []CallTypeStat
+	for _, v := range agg {
+		results = append(results, *v)
+	}
+	// 按 timePoint + streamName + callType 排序，保证输出稳定
+	sort.Slice(results, func(i, j int) bool {
+		if results[i].TimePoint != results[j].TimePoint {
+			return results[i].TimePoint < results[j].TimePoint
+		}
+		if results[i].StreamName != results[j].StreamName {
+			return results[i].StreamName < results[j].StreamName
+		}
+		return results[i].CallType < results[j].CallType
+	})
+
+	return results
 }
 
 // == 访问控制相关逻辑 ==============================================================================================
