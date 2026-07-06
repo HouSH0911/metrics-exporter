@@ -16,6 +16,7 @@ func metricsHandler(w http.ResponseWriter, r *http.Request, cfg Config) {
 	metricsCopy := cache.Metrics
 	processesCopy := append([]ProcessStatus(nil), cache.ProcessStatuses...)
 	streamStatsCopy := append([]StreamStat(nil), cache.StreamStats...)
+	callTypeStatsCopy := append([]CallTypeStat(nil), cache.CallTypeStats...)
 	cacheLastUpdated := cache.LastUpdated
 	cache.mu.RUnlock()
 
@@ -33,6 +34,7 @@ func metricsHandler(w http.ResponseWriter, r *http.Request, cfg Config) {
 			metricsCopy = cache.Metrics
 			processesCopy = append([]ProcessStatus(nil), cache.ProcessStatuses...)
 			streamStatsCopy = append([]StreamStat(nil), cache.StreamStats...)
+			callTypeStatsCopy = append([]CallTypeStat(nil), cache.CallTypeStats...)
 			cache.mu.RUnlock()
 		case <-time.After(2 * time.Second):
 			log.Printf("Warning: metrics cache stale, returning old values")
@@ -107,7 +109,7 @@ func metricsHandler(w http.ResponseWriter, r *http.Request, cfg Config) {
 
 	// 构建 Prometheus 格式输出
 	var sb strings.Builder
-	writePrometheusMetrics(&sb, instance, metricsCopy, directoryStatuses, processesCopy, portStatuses, streamStatsCopy)
+	writePrometheusMetrics(&sb, instance, metricsCopy, directoryStatuses, processesCopy, portStatuses, streamStatsCopy, callTypeStatsCopy)
 
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 	_, _ = w.Write([]byte(sb.String()))
@@ -115,7 +117,7 @@ func metricsHandler(w http.ResponseWriter, r *http.Request, cfg Config) {
 
 // writePrometheusMetrics 构建 Prometheus text 格式的指标数据
 func writePrometheusMetrics(sb *strings.Builder, instance string, m Metrics,
-	dirs []DirectoryStatus, procs []ProcessStatus, ports []PortStatus, streams []StreamStat) {
+	dirs []DirectoryStatus, procs []ProcessStatus, ports []PortStatus, streams []StreamStat, callTypes []CallTypeStat) {
 
 	// --- 系统指标 ---
 	sb.WriteString("# HELP server_cpu_usage_percent CPU usage percentage (EMA smoothed).\n")
@@ -187,5 +189,20 @@ func writePrometheusMetrics(sb *strings.Builder, instance string, m Metrics,
 	sb.WriteString("# TYPE server_stream_total_size_bytes gauge\n")
 	for _, ss := range streams {
 		fmt.Fprintf(sb, "server_stream_total_size_bytes{instance=%q,type=%q,streamName=%q,statDate=%q} %d\n", instance, "stream", ss.StreamName, ss.StatDate, ss.TotalSize)
+	}
+
+	// --- 话单类型统计 ---
+	sb.WriteString("# HELP server_calltype_files_total Call type file count in recent time window.\n")
+	sb.WriteString("# TYPE server_calltype_files_total gauge\n")
+	for _, ct := range callTypes {
+		fmt.Fprintf(sb, "server_calltype_files_total{instance=%q,type=%q,streamName=%q,callType=%q,timePoint=%q} %d\n",
+			instance, "stream", ct.StreamName, ct.CallType, ct.TimePoint, ct.TotalFiles)
+	}
+
+	sb.WriteString("# HELP server_calltype_size_bytes_total Call type total size in bytes in recent time window.\n")
+	sb.WriteString("# TYPE server_calltype_size_bytes_total gauge\n")
+	for _, ct := range callTypes {
+		fmt.Fprintf(sb, "server_calltype_size_bytes_total{instance=%q,type=%q,streamName=%q,callType=%q,timePoint=%q} %d\n",
+			instance, "stream", ct.StreamName, ct.CallType, ct.TimePoint, ct.TotalSize)
 	}
 }
