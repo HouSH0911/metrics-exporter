@@ -14,6 +14,7 @@ func handler(w http.ResponseWriter, r *http.Request, cfg Config) {
 	metricsCopy := cache.Metrics
 	processesCopy := append([]ProcessStatus(nil), cache.ProcessStatuses...)
 	streamStatsCopy := append([]StreamStat(nil), cache.StreamStats...) // 复制一份新的统计数据
+	callTypeStatsCopy := append([]CallTypeStat(nil), cache.CallTypeStats...) // 复制话单类型统计
 	cacheLastUpdated := cache.LastUpdated
 	cache.mu.RUnlock()
 
@@ -34,6 +35,7 @@ func handler(w http.ResponseWriter, r *http.Request, cfg Config) {
 			metricsCopy = cache.Metrics
 			processesCopy = append([]ProcessStatus(nil), cache.ProcessStatuses...)
 			streamStatsCopy = append([]StreamStat(nil), cache.StreamStats...)
+			callTypeStatsCopy = append([]CallTypeStat(nil), cache.CallTypeStats...)
 			cache.mu.RUnlock()
 		case <-time.After(2 * time.Second):
 			// 超时，继续使用旧缓存
@@ -103,6 +105,7 @@ func handler(w http.ResponseWriter, r *http.Request, cfg Config) {
 		ProcessStatuses:   processesCopy,
 		PortStatuses:      portStatuses,
 		StreamStats:       streamStatsCopy, // 返回新增的统计
+		CallTypeStats:     callTypeStatsCopy, // 返回话单类型统计
 		Metrics:           metricsCopy,
 	}
 
