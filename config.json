@@ -29,7 +29,8 @@
     ],
     "fileTransfer": {
         "logPath": "/home/haohan/importer/logs/statistic/",
-        "streams": ["XDR_SJJS", "XDR_JK"]
+        "streams": ["XDR_SJJS", "XDR_JK"],
+        "recentMinutes": 60
     }
 }
 
