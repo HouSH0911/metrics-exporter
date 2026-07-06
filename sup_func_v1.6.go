@@ -104,8 +104,10 @@ func doCollectMetrics() {
 	var currentCallTypeStats []CallTypeStat
 	cache.mu.RLock()
 	lastTransferRefresh := cache.lastTransferRefresh
-	transferConfig := config.FileTransfer
 	cache.mu.RUnlock()
+	configMutex.RLock()
+	transferConfig := config.FileTransfer
+	configMutex.RUnlock()
 
 	if lastTransferRefresh.IsZero() || now.Sub(lastTransferRefresh) > transferStatInterval {
 		newStats := collectTransferStats(transferConfig)
@@ -433,17 +435,8 @@ func collectCallTypeStats(cfg FileTransferConfig) []CallTypeStat {
 			date       string
 			withSuffix bool
 		}{today, false})
-	} else if windowStartDate == yesterday {
-		// 窗口跨到今天和昨天
-		datesToRead = append(datesToRead, struct {
-			date       string
-			withSuffix bool
-		}{yesterday, true}, struct {
-			date       string
-			withSuffix bool
-		}{today, false})
 	} else {
-		// 窗口跨越更多天，读今天+昨天（覆盖绝大多数场景）
+		// 窗口跨到今天/昨天，或跨越更多天（覆盖绝大多数场景）
 		datesToRead = append(datesToRead, struct {
 			date       string
 			withSuffix bool
@@ -470,6 +463,12 @@ func collectCallTypeStats(cfg FileTransferConfig) []CallTypeStat {
 			continue
 		}
 
+		// 构建配置数据流查找集合
+		streamSet := make(map[string]bool, len(cfg.Streams))
+		for _, s := range cfg.Streams {
+			streamSet[s] = true
+		}
+
 		scanner := bufio.NewScanner(file)
 		for scanner.Scan() {
 			line := scanner.Text()
@@ -489,21 +488,14 @@ func collectCallTypeStats(cfg FileTransferConfig) []CallTypeStat {
 			}
 
 			// 检查数据流是否在配置中
-			streamConfigured := false
-			for _, s := range cfg.Streams {
-				if s == streamName {
-					streamConfigured = true
-					break
-				}
-			}
-			if !streamConfigured {
+			if !streamSet[streamName] {
 				continue
 			}
 
 			// 从文件路径中提取文件名并解析话单类型和5分钟时间点
-			fileName := filepath.Base(filePath)
+			baseName := filepath.Base(filePath)
 			// 例: 100_20260703000011_083.csv 或 100_20260702235500_06_083_006.txt
-			underscoreParts := strings.Split(fileName, "_")
+			underscoreParts := strings.Split(baseName, "_")
 			if len(underscoreParts) < 2 {
 				continue
 			}
