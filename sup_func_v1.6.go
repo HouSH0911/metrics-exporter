@@ -508,8 +508,9 @@ func collectCallTypeStats(cfg FileTransferConfig) []CallTypeStat {
 			// 取前12位作为 YYYYMMDDHHMM
 			timePoint := timeStr[:12]
 
-			// 解析为时间，检查是否在窗口内
-			t, err := time.Parse("200601021504", timePoint)
+			// 解析为时间（使用北京时间），检查是否在窗口内
+			loc, _ := time.LoadLocation("Asia/Shanghai")
+			t, err := time.ParseInLocation("200601021504", timePoint, loc)
 			if err != nil {
 				continue
 			}
