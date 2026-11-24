@@ -47,6 +47,7 @@ func handler(w http.ResponseWriter, r *http.Request, cfg Config) {
 	date := getCurrentDate()
 	timeStr := getCurrentTimeToNearest5()
 	timeStrNext := getTimeToNearest5MinNext()
+	datePlus, timeStrPlus := getTimeToNearest5Plus5()
 	date1, timeMinus60 := getTimeToNearest5Minus60()
 
 	var directoryStatuses []DirectoryStatus
@@ -70,7 +71,8 @@ func handler(w http.ResponseWriter, r *http.Request, cfg Config) {
 		if folderExists {
 			fileExistsCurrent, _ := checkFileExistsWithTime(folderPath, date+timeStr)
 			fileExistsNext, _ := checkFileExistsWithTime(folderPath, date+timeStrNext)
-			fileExists = fileExistsCurrent || fileExistsNext
+			fileExistsPlus, _ := checkFileExistsWithTime(folderPath, datePlus+timeStrPlus)
+			fileExists = fileExistsCurrent || fileExistsNext || fileExistsPlus
 		} else {
 			fileExists, _ = checkFileExistsWithTime(baseDir, date1+timeMinus60)
 		}

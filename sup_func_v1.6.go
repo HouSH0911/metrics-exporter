@@ -367,6 +367,14 @@ func getTimeToNearest5Minus60() (string, string) {
 	return date, fmt.Sprintf("%02d%02d", now.Hour(), minute)
 }
 
+// 获取当前时间后5分钟的整5分钟（下一个五分钟点），返回日期和时间，处理跨天场景
+func getTimeToNearest5Plus5() (string, string) {
+	now := time.Now().Add(5 * time.Minute)
+	date := now.Format("20060102")
+	minute := now.Minute() - now.Minute()%5
+	return date, fmt.Sprintf("%02d%02d", now.Hour(), minute)
+}
+
 // 检查指定主机和端口是否可达
 func checkPort(host string, port int) bool {
 	address := fmt.Sprintf("%s:%d", host, port)
